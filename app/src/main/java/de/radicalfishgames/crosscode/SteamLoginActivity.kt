@@ -16,11 +16,13 @@ import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -226,7 +228,24 @@ class SteamLoginActivity : AppCompatActivity() {
     private fun loginWithQr() {
         val d = resources.displayMetrics.density
         fun dp(v: Int) = (v * d).toInt()
-        val sizePx = dp(168)
+
+        // Size everything from the space this window actually has, so the QR is never clipped.
+        // (It used to be a fixed ~470dp-wide layout: fine on 16:9, but on a 4:3 handheld the
+        // dialog is narrower than that and the QR on the right got cut off.) screenWidthDp/
+        // screenHeightDp are the usable window size, so this also holds in split-screen.
+        val screenW = resources.configuration.screenWidthDp
+        val screenH = resources.configuration.screenHeightDp
+        val pad = if (screenW < 600) 16 else 24
+        val dialogW = minOf(screenW - 32, 600)                       // 16dp clear of each screen edge
+        val contentW = dialogW - 2 * 24 - 2 * pad                     // minus dialog background insets + our padding
+        val gap = 16
+        val heightBudget = screenH - (56 + 2 * 24 + 2 * pad + 16)     // minus button bar, insets, padding, slack
+        // The QR takes at most half the row (the text column flexes into the rest), never more than
+        // fits vertically, capped at 240dp, and never below 96dp (still scannable at arm's length).
+        val qrDp = minOf((contentW - gap) / 2, heightBudget, 240).coerceAtLeast(96)
+        val sizePx = dp(qrDp)
+        val qrPad = dp(6)
+        val qrBitmapPx = sizePx - 2 * qrPad                           // drawn 1:1 inside the white border: no blur
 
         // Landscape-friendly: instructions on the left, QR on the right.
         val heading = TextView(this).apply {
@@ -242,23 +261,26 @@ class SteamLoginActivity : AppCompatActivity() {
             text = "Connecting to Steam…"
             setPadding(0, dp(14), 0, 0)
         }
+        // Text column flexes (width 0 + weight 1) instead of a fixed 232dp, so it wraps to whatever
+        // room the QR leaves.
         val left = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(dp(232), LinearLayout.LayoutParams.WRAP_CONTENT)
             gravity = Gravity.CENTER_VERTICAL
             addView(heading); addView(instructions); addView(qrStatus)
         }
         val qrView = ImageView(this).apply {
             setBackgroundColor(Color.WHITE)
-            setPadding(dp(6), dp(6), dp(6), dp(6))
+            setPadding(qrPad, qrPad, qrPad, qrPad)
         }
-        val container = LinearLayout(this).apply {
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(24), dp(18), dp(24), dp(18))
-            addView(left)
-            addView(qrView, LinearLayout.LayoutParams(sizePx, sizePx).apply { leftMargin = dp(20) })
+            setPadding(dp(pad), dp(18), dp(pad), dp(18))
+            addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(qrView, LinearLayout.LayoutParams(sizePx, sizePx).apply { leftMargin = dp(gap) })
         }
+        // Last-resort safety on very short windows: scroll rather than clip.
+        val container = ScrollView(this).apply { addView(row) }
 
         val auth = SteamAuth()
         val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -267,12 +289,14 @@ class SteamLoginActivity : AppCompatActivity() {
             .setNegativeButton("Cancel") { _, _ -> aborted.set(true); auth.abort() }
             .setOnCancelListener { aborted.set(true); auth.abort() }
             .show()
+        // Give the dialog the width we planned for, instead of the theme's default.
+        dialog.window?.setLayout(dp(dialogW), WindowManager.LayoutParams.WRAP_CONTENT)
 
         Thread {
             try {
                 val result = auth.loginViaQr(
                     onChallengeUrl = { url ->
-                        val bmp = runCatching { qrBitmap(url, sizePx) }.getOrNull()
+                        val bmp = runCatching { qrBitmap(url, qrBitmapPx) }.getOrNull()
                         runOnUiThread {
                             bmp?.let { qrView.setImageBitmap(it) }
                             qrStatus.text = "Scan with your Steam Mobile app, then tap Approve."
