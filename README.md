@@ -57,9 +57,9 @@ offline. On every boot the game re-reports all trophies already in your save, so
 before this feature existed gets unlocked too.
 
 While an unlock is being written (a few seconds), your Steam profile briefly shows *In-game:
-CrossCode*. Toggle it under **Settings → Steam achievements**. **Achievements: dry run** (on by
-default for now) logs what it *would* unlock to `adb logcat -s CrossCode` without writing anything;
-turn it off to unlock for real.
+CrossCode*. Toggle it under **Settings → Steam achievements** on the launcher. For troubleshooting,
+**Achievements: dry run** logs what it *would* unlock to `adb logcat -s CrossCode` without writing
+anything to Steam.
 
 ## Credits
 

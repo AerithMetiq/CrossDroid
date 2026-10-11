@@ -20,7 +20,7 @@ object AchievementSync {
     private const val GAME_PREFS = "de.radicalfishgames.crosscode_preferences"
 
     fun isEnabled(ctx: Context) = gamePrefs(ctx).getBoolean(PREF_ENABLED, true)
-    fun isDryRun(ctx: Context) = gamePrefs(ctx).getBoolean(PREF_DRY_RUN, true)
+    fun isDryRun(ctx: Context) = gamePrefs(ctx).getBoolean(PREF_DRY_RUN, false)
 
     @Synchronized
     fun add(ctx: Context, names: Collection<String>) {

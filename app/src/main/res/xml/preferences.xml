@@ -76,7 +76,7 @@
         app:title="@string/steam_achievements_title" />
 
     <SwitchPreference
-        android:defaultValue="true"
+        android:defaultValue="false"
         android:dependency="steam_achievements"
         android:key="steam_achievements_dry_run"
         app:summary="@string/steam_achievements_dry_run_summary"
