@@ -49,6 +49,7 @@ dependencies {
 
     // Steam client (Java port of SteamKit2): login + depot download + cloud-save sync.
     implementation 'in.dragonbra:javasteam:1.6.0'
+    implementation 'com.google.protobuf:protobuf-java:4.29.2'
     // JavaSteam's CryptoHelper needs the full BouncyCastle JCE provider; Android only ships a
     // stripped com.android.org.bouncycastle, so bundle the real one explicitly.
     implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
