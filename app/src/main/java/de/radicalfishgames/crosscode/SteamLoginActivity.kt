@@ -32,6 +32,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 import de.radicalfishgames.crosscode.steam.SteamAuth
+import de.radicalfishgames.crosscode.preferences.PreferencesActivity
 import de.radicalfishgames.crosscode.steam.AchievementSync
 import de.radicalfishgames.crosscode.steam.SteamCloudSync
 import de.radicalfishgames.crosscode.steam.SteamDepotDownloader
@@ -101,6 +102,9 @@ class SteamLoginActivity : AppCompatActivity() {
             updatePlayLabel()
         }
         findViewById<MaterialButton>(R.id.sign_out_button).setOnClickListener { signOut() }
+        findViewById<MaterialButton>(R.id.settings_button).setOnClickListener {
+            startActivity(Intent(this, PreferencesActivity::class.java))
+        }
 
         renderState()
         if (prefs.getString("token", null) == null) {

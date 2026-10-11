@@ -209,16 +209,35 @@
                         android:textSize="13sp"
                         android:buttonTint="@color/play_cyan" />
 
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/sign_out_button"
-                        style="@style/Widget.MaterialComponents.Button.TextButton"
+                    <!-- Settings + Sign out side by side. Settings opens PreferencesActivity, which was
+                         previously only reachable from the old file-setup launcher. -->
+                    <LinearLayout
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="Sign out"
-                        android:textColor="@color/text_secondary"
-                        android:textAllCaps="false"
-                        app:rippleColor="@color/text_secondary" />
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/settings_button"
+                            style="@style/Widget.MaterialComponents.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Settings"
+                            android:textColor="@color/text_secondary"
+                            android:textAllCaps="false"
+                            app:rippleColor="@color/text_secondary" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/sign_out_button"
+                            style="@style/Widget.MaterialComponents.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:text="Sign out"
+                            android:textColor="@color/text_secondary"
+                            android:textAllCaps="false"
+                            app:rippleColor="@color/text_secondary" />
+                    </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
         </LinearLayout>
