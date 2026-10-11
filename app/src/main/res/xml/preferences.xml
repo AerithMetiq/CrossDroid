@@ -69,4 +69,17 @@
         app:summary="@string/export_save_summary"
         app:title="@string/export_save_title" />
 
+    <SwitchPreference
+        android:defaultValue="true"
+        android:key="steam_achievements"
+        app:summary="@string/steam_achievements_summary"
+        app:title="@string/steam_achievements_title" />
+
+    <SwitchPreference
+        android:defaultValue="true"
+        android:dependency="steam_achievements"
+        android:key="steam_achievements_dry_run"
+        app:summary="@string/steam_achievements_dry_run_summary"
+        app:title="@string/steam_achievements_dry_run_title" />
+
 </PreferenceScreen>

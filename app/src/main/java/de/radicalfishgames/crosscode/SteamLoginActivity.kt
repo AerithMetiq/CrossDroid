@@ -32,6 +32,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 import de.radicalfishgames.crosscode.steam.SteamAuth
+import de.radicalfishgames.crosscode.steam.AchievementSync
 import de.radicalfishgames.crosscode.steam.SteamCloudSync
 import de.radicalfishgames.crosscode.steam.SteamDepotDownloader
 import java.io.File
@@ -348,6 +349,9 @@ class SteamLoginActivity : AppCompatActivity() {
                     }
                     SteamCloudSync.ConnectResult.OK -> {
                         prefs.edit().putBoolean("sessionOffline", false).apply()  // online this session
+                        // Achievements earned during an offline session (or a run that never reached
+                        // the quit flow) are still queued — send them now. No-op when the queue is empty.
+                        AchievementSync.flush(this, sync)
                         val cloud = sync.findSave()
                         when {
                             cloud == null -> {
@@ -540,6 +544,7 @@ class SteamLoginActivity : AppCompatActivity() {
         prefs.edit().remove("account").remove("token").remove("guard")
             .remove("persona").remove("avatarHash").apply()
         runCatching { avatarFile.delete() }
+        AchievementSync.reset(this)   // queued/synced achievements belong to the old account
         username.setText(""); password.setText("")
         renderState()
         setStatus("Signed out.")

@@ -14,6 +14,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import de.radicalfishgames.crosscode.features.*
 import de.radicalfishgames.crosscode.gamelisteners.GameEventManager
+import de.radicalfishgames.crosscode.steam.AchievementSync
 import de.radicalfishgames.crosscode.steam.SteamCloudSync
 import org.json.JSONTokener
 import java.io.File
@@ -80,7 +81,8 @@ class GameActivity : AppCompatActivity() {
             QuitMenuFeature(gameWrapper, this),
             ImportExportFeature(gameWrapper, this),
             HapticFeedbackFeature(gameWrapper, this),
-            OverlayScaleFeature(gameWrapper, this)
+            OverlayScaleFeature(gameWrapper, this),
+            SteamAchievementFeature(gameWrapper, this)
         ))
 
         // Bridge the in-game "Exit" button (added by QuitMenuFeature) to the cloud-save quit flow.
@@ -110,6 +112,10 @@ class GameActivity : AppCompatActivity() {
         val account = prefs.getString("account", null)
         val token = prefs.getString("token", null)
         val saveFile = File(getExternalFilesDir(null), "cloudsave/cc.save")
+
+        // Queue every trophy the game says is earned (callbacks run in order, so this lands before
+        // the save callback below starts the upload thread that flushes the queue).
+        gameWrapper.getFeature(SteamAchievementFeature::class).collectUnlocked()
 
         gameWrapper.runJS("localStorage.getItem('cc.save')", ValueCallback { result ->
             try {
@@ -157,6 +163,9 @@ class GameActivity : AppCompatActivity() {
                                 SteamCloudSync.PushResult.FAILED ->
                                     "Couldn't upload to Steam Cloud — saved locally, will retry next time."
                             }
+                            // Same session: unlock any achievements earned this run. Never throws;
+                            // anything that doesn't go through stays queued for next time.
+                            AchievementSync.flush(this, sync)?.let { msg += " $it" }
                         } else {
                             msg = "Couldn't reach Steam Cloud — saved locally, will retry next time."
                         }

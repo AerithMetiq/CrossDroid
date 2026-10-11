@@ -47,6 +47,20 @@ CrossCode persists its save to the WebView's `localStorage`, byte-for-byte ident
 game boots, and uploads it back when you quit — last-write-wins, and it skips the upload when nothing
 changed.
 
+## Steam achievements
+
+CrossCode's in-game trophies map to its Steam achievements (each trophy carries a `steamID`). On
+desktop the game unlocks them through Greenworks, which doesn't exist on Android, so CrossDroid
+bridges `ig.Greenworks` to a small queue and unlocks the queued achievements over the same Steam
+connection it uses for Cloud saves — when you quit, or on the next online **PLAY** if you were
+offline. On every boot the game re-reports all trophies already in your save, so anything earned
+before this feature existed gets unlocked too.
+
+While an unlock is being written (a few seconds), your Steam profile briefly shows *In-game:
+CrossCode*. Toggle it under **Settings → Steam achievements**. **Achievements: dry run** (on by
+default for now) logs what it *would* unlock to `adb logcat -s CrossCode` without writing anything;
+turn it off to unlock for real.
+
 ## Credits
 
 CrossDroid stands on the shoulders of these projects:

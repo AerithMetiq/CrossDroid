@@ -32,6 +32,9 @@ class SteamCloudSync(private val accountName: String, private val refreshToken: 
     private val steamUser: SteamUser = client.getHandler(SteamUser::class.java)!!
     private val cloud: SteamCloud = client.getHandler(SteamCloud::class.java)!!
 
+    // Achievement unlocks ride the same logged-on session (see AchievementSync.flush).
+    val achievements: SteamAchievements = SteamAchievements().also { client.addHandler(it) }
+
     @Volatile private var pumping = false
     private var pumpThread: Thread? = null
 

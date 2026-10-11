@@ -37,4 +37,8 @@
     <string name="disable_swipe_dash_summary">Only dash when the dash area is tapped (not swiped into) to avoid dashing by accident</string>
     <string name="force_virtual_summary">Always use the virtual controller, even when a physical controller is connected.</string>
     <string name="force_virtual_title">Force Virtual Controller</string>
+    <string name="steam_achievements_title">Steam achievements</string>
+    <string name="steam_achievements_summary">Unlock your earned trophies as Steam achievements when you quit (or on the next online PLAY).</string>
+    <string name="steam_achievements_dry_run_title">Achievements: dry run</string>
+    <string name="steam_achievements_dry_run_summary">Only log what would be unlocked (adb logcat -s CrossCode). Nothing is written to Steam. Turn off to unlock for real.</string>
 </resources>
