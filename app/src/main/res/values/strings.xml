@@ -61,4 +61,6 @@
     <string name="game_verify_summary">Checks every game file against Steam and downloads the ones that are missing or damaged.</string>
     <string name="game_delete_title">Delete game files</string>
     <string name="game_delete_summary">Frees the storage CrossCode takes. Your save, its backups and your settings stay.</string>
+    <string name="stats_overlay_title">Show FPS / battery / temp</string>
+    <string name="stats_overlay_summary">A small readout in the corner of the game: frames per second, the size the game renders at, battery level and temperature. Also in the in-game menu (Back).</string>
 </resources>

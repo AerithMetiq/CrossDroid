@@ -26,7 +26,8 @@ controller, and sync your progress back to **Steam Cloud** when you quit. Built 
 - **Save safety** — before a sync replaces the save on the device it keeps a backup you can restore
   (Settings), a **check** shows what PLAY would do without doing it, and uploads can be switched off.
 - **In-game pause menu** — Back pauses the game and opens a menu a controller can drive: resume,
-  touch controls on/off, a frame-rate limit (30/45/60, plus 90/120 on screens that have them), quit.
+  touch controls on/off, an FPS / battery / temperature readout, a frame-rate limit (30/45/60, plus
+  90/120 on screens that have them), quit.
 - **Playing status** (optional, off by default) — show as playing CrossCode on Steam.
 
 ## Requirements

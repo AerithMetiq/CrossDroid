@@ -22,13 +22,14 @@ import android.widget.TextView
 // GameActivity hands it the controller's keys (padKey) and the selected row wears a ring. Touch
 // works as well: every row is its own tap target, and a tap on the scrim resumes the game.
 //
-// The view only shows what it is told (setTouchControls, setFrameRate) and reports what the player
+// The view only shows what it is told (setTouchControls, setStats, setFrameRate) and reports what the player
 // did through the callbacks; GameActivity owns the settings.
 class PauseMenuView(context: Context) : FrameLayout(context) {
 
     var onTouchControls: ((Boolean) -> Unit)? = null
     // The frame-rate limit the player chose: FrameRate.OFF, or a rate.
     var onFrameRate: ((Int) -> Unit)? = null
+    var onStats: ((Boolean) -> Unit)? = null
     var onResume: (() -> Unit)? = null
     var onExit: (() -> Unit)? = null
 
@@ -40,11 +41,13 @@ class PauseMenuView(context: Context) : FrameLayout(context) {
 
     private val touchSwitch = Switch(context)
     private val limitSwitch = Switch(context)
+    private val statsSwitch = Switch(context)
     private val rateValue = TextView(context)
     private lateinit var rateRow: View
     private lateinit var scroller: ScrollView
 
     private var touchControls = false
+    private var stats = false
     private var limit = FrameRate.OFF
     private var choices = FrameRate.CHOICES
     // The rate the switch turns on: the last one chosen, 30 until there is one.
@@ -79,6 +82,8 @@ class PauseMenuView(context: Context) : FrameLayout(context) {
     fun close() { visibility = GONE }
 
     fun setTouchControls(on: Boolean) { touchControls = on; sync() }
+
+    fun setStats(on: Boolean) { stats = on; sync() }
 
     // The limit in force (FrameRate.OFF for none) and the rates this screen is offered.
     fun setFrameRate(limit: Int, choices: List<Int>) {
@@ -157,6 +162,11 @@ class PauseMenuView(context: Context) : FrameLayout(context) {
             touchControls = !touchControls
             sync()
             onTouchControls?.invoke(touchControls)
+        }
+        addRow(panel, "Show FPS / battery / temp", statsSwitch) {
+            stats = !stats
+            sync()
+            onStats?.invoke(stats)
         }
         addRow(panel, "Limit the frame rate", limitSwitch) {
             limit = if (limit == FrameRate.OFF) lastRate else FrameRate.OFF
@@ -238,6 +248,7 @@ class PauseMenuView(context: Context) : FrameLayout(context) {
     // The only writer of the widget state.
     private fun sync() {
         touchSwitch.isChecked = touchControls
+        statsSwitch.isChecked = stats
         limitSwitch.isChecked = limit != FrameRate.OFF
         rateValue.text = "◀   ${if (limit == FrameRate.OFF) lastRate else limit} fps   ▶"
         if (::rateRow.isInitialized) rateRow.visibility = if (limit != FrameRate.OFF) VISIBLE else GONE

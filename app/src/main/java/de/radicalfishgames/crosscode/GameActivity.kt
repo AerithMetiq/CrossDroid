@@ -86,7 +86,8 @@ class GameActivity : AppCompatActivity() {
             HapticFeedbackFeature(gameWrapper, this),
             OverlayScaleFeature(gameWrapper, this),
             SteamAchievementFeature(gameWrapper, this),
-            FrameRateFeature(gameWrapper, this)
+            FrameRateFeature(gameWrapper, this),
+            StatsOverlayFeature(gameWrapper, this)
         ))
         applyRefreshRate()
 
@@ -160,6 +161,7 @@ class GameActivity : AppCompatActivity() {
                 gameWrapper.getFeature(FrameRateFeature::class).set(it)
                 applyRefreshRate()
             }
+            m.onStats = { gameWrapper.getFeature(StatsOverlayFeature::class).set(it) }
             m.onResume = { closeMenu() }
             m.onExit = { closeMenu(resume = false); quitWithCloudSync() }
             findViewById<ViewGroup>(R.id.root_view).addView(
@@ -172,7 +174,17 @@ class GameActivity : AppCompatActivity() {
             GameFiles.touchControls(this) && (touch.shown || !touch.enabled && preferences.getBoolean("force_virtual", false))
         )
         view.setFrameRate(gameWrapper.getFeature(FrameRateFeature::class).limit, frameRateChoices)
+        view.setStats(gameWrapper.getFeature(StatsOverlayFeature::class).enabled)
         menuHeldDirection = 0
+        /* The WebView must hold view focus while the menu is up. After the screen was touched the
+         * window is in touch mode; the first D-pad press then leaves touch mode, and when nothing
+         * holds focus Android spends that press on giving focus to a view: the press never arrives
+         * (measured: the menu's first Down after a tap on PLAY was lost). */
+        findViewById<View>(R.id.game_view).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            requestFocus()
+        }
         view.open()
         gameWrapper.runJS("window.dispatchEvent(new FocusEvent(\"blur\"));")
     }

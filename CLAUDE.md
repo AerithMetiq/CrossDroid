@@ -103,6 +103,9 @@ app/src/main/java/de/radicalfishgames/crosscode/
   (CrossCode's own focus-lost pause; `ig.system.hasFocusLost()` is true while it is open); closing
   dispatches `focus`. Nothing in it takes view focus: `GameActivity.menuKey` / `dispatchGenericMotionEvent`
   hand it D-pad, stick, A and B.
+  `openMenu` gives the WebView view focus first: after a touch the window is in touch mode, and
+  with nothing focused Android spends the first D-pad press on leaving touch mode, so the press
+  never reached the menu (seen on the Nova: the first Down after tapping PLAY was lost).
 - **Back** is acted on in `dispatchKeyEvent` whatever device sent it. Upstream dropped every Back
   from a gamepad source, to ignore the Back the system makes out of an unhandled B; on the Retroid
   Pocket Nova the real Back button belongs to the built-in gamepad, so Back never worked there. A
@@ -119,6 +122,10 @@ app/src/main/java/de/radicalfishgames/crosscode/
   (`window.requestAnimationFrame(ig.system.run.bind(ig.system), ...)`). The gate keeps a running
   deadline, so 45 on a 60 Hz screen averages 45. `GameActivity.applyRefreshRate` asks for the screen
   mode a limit divides evenly.
+- **FPS readout** (`StatsOverlayFeature`, `stats_overlay`, off by default): a DOM layer in the
+  top-left corner, like Alabaster Droid's ("60 fps · 1136x640 · bat 50% 27.0°C · therm none"). It
+  counts calls of `ig.system.run`, so it shows what the engine draws (frame-rate limit included)
+  and 0 while paused; battery and thermal state come from the `CCStats` JavaScript interface.
 - **Touch controls switch** (`touch_controls`): off means no overlay at all. The pause menu can hide
   or show an overlay that was set up at start; if it was not (a controller was connected), the change
   applies from the next start, and turning it on with a controller connected also sets `force_virtual`.
