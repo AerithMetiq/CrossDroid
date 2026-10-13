@@ -7,7 +7,9 @@ import android.os.Bundle
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.widget.Toast
@@ -16,6 +18,7 @@ import de.radicalfishgames.crosscode.features.*
 import de.radicalfishgames.crosscode.gamelisteners.GameEventManager
 import de.radicalfishgames.crosscode.steam.AchievementSync
 import de.radicalfishgames.crosscode.steam.SteamCloudSync
+import de.radicalfishgames.crosscode.steam.SteamPresence
 import org.json.JSONTokener
 import java.io.File
 
@@ -82,8 +85,10 @@ class GameActivity : AppCompatActivity() {
             ImportExportFeature(gameWrapper, this),
             HapticFeedbackFeature(gameWrapper, this),
             OverlayScaleFeature(gameWrapper, this),
-            SteamAchievementFeature(gameWrapper, this)
+            SteamAchievementFeature(gameWrapper, this),
+            FrameRateFeature(gameWrapper, this)
         ))
+        applyRefreshRate()
 
         // Bridge the in-game "Exit" button (added by QuitMenuFeature) to the cloud-save quit flow.
         gameWrapper.exposeJSInterface(QuitBridge(), "CCAndroid")
@@ -92,17 +97,177 @@ class GameActivity : AppCompatActivity() {
 
     }
 
-    override fun onBackPressed() {
-        // The system back gesture/button always offers a way out (essential on handhelds like the
-        // AYN Thor, where a native controller is always present so the old code blocked back entirely).
-        // A controller's B button is filtered out in onKeyDown below so it doesn't trigger this.
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Quit CrossCode?")
-            .setMessage("Your progress will be saved to Steam Cloud.")
-            .setPositiveButton("Quit") { _, _ -> quitWithCloudSync() }
-            .setNegativeButton("Keep playing", null)
-            .setOnDismissListener { goIntoFullScreen() }
-            .show()
+    // The refresh rates this screen offers at the size it is running at now, and the frame-rate
+    // limits offered for them (a 60 Hz screen is not offered 90 or 120).
+    val refreshRates: List<Int> by lazy {
+        try {
+            @Suppress("DEPRECATION")
+            val display = if (android.os.Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
+            if (android.os.Build.VERSION.SDK_INT < 23 || display == null) emptyList()
+            else {
+                val now = display.mode
+                display.supportedModes
+                    .filter { it.physicalWidth == now.physicalWidth && it.physicalHeight == now.physicalHeight }
+                    .map { Math.round(it.refreshRate) }.distinct().sorted()
+            }
+        } catch (e: Exception) { emptyList() }
+    }
+    val frameRateChoices: List<Int> by lazy { FrameRate.choicesFor(refreshRates) }
+
+    // Asks for the screen refresh rate the frame-rate limit is best shown at (see FrameRate.refreshFor).
+    private fun applyRefreshRate() {
+        if (refreshRates.size < 2) return
+        val limit = FrameRate.normalize(GameFiles.fpsLimit(this), frameRateChoices)
+        val rate = FrameRate.refreshFor(limit, refreshRates) ?: return
+        window.attributes = window.attributes.apply { preferredRefreshRate = rate.toFloat() }
+        Log.i("CrossCode", "[FrameRate] screen asked for $rate Hz of $refreshRates")
+    }
+
+    // The in-game menu (see PauseMenuView): a panel on the right, added over the game on first use.
+    private var menu: PauseMenuView? = null
+    // The direction a stick or hat is held in while the menu is open, as a D-pad key code, or 0.
+    private var menuHeldDirection = 0
+    private var lastBackAt = 0L
+    private var lastButtonBAt = 0L
+
+    // Back opens the menu, and closes it when it is open. The system back gesture/button always
+    // offers a way out (essential on handhelds like the AYN Thor, where a native controller is
+    // always present so the old code blocked back entirely).
+    //
+    // The game is paused while the menu is open, the same way it is when the app goes to the
+    // background (the page is told it lost focus), and the controller drives the menu instead.
+    override fun onBackPressed() = backPressed()
+
+    // One Back press, from whichever path delivered it (the key, or the back gesture); a second
+    // report of the same press is dropped.
+    private fun backPressed() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastBackAt < 300) return
+        /* A controller's B that nothing handled is turned into a Back by the system, right after
+         * the B itself. The game reads B through the gamepad API, so that Back is not a Back.
+         * (Measured on the Retroid Pocket Nova: it does not arrive marked as a fallback key, so the
+         * timing is what tells it apart; with the old source test the real Back button was thrown
+         * away as well, because there it belongs to the built-in gamepad.) */
+        if (now - lastButtonBAt < 300) return
+        lastBackAt = now
+        if (menu?.isOpen == true) closeMenu() else openMenu()
+    }
+
+    private fun openMenu() {
+        val view = menu ?: PauseMenuView(this).also { m ->
+            m.onTouchControls = { setTouchControls(it) }
+            m.onFrameRate = {
+                gameWrapper.getFeature(FrameRateFeature::class).set(it)
+                applyRefreshRate()
+            }
+            m.onResume = { closeMenu() }
+            m.onExit = { closeMenu(resume = false); quitWithCloudSync() }
+            findViewById<ViewGroup>(R.id.root_view).addView(
+                m, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+            menu = m
+        }
+        val touch = gameWrapper.getFeature(VirtualControllerFeature::class)
+        view.setTouchControls(
+            GameFiles.touchControls(this) && (touch.shown || !touch.enabled && preferences.getBoolean("force_virtual", false))
+        )
+        view.setFrameRate(gameWrapper.getFeature(FrameRateFeature::class).limit, frameRateChoices)
+        menuHeldDirection = 0
+        view.open()
+        gameWrapper.runJS("window.dispatchEvent(new FocusEvent(\"blur\"));")
+    }
+
+    private fun closeMenu(resume: Boolean = true) {
+        menu?.close()
+        if (resume) {
+            gameWrapper.runJS("window.dispatchEvent(new FocusEvent(\"focus\"));")
+            goIntoFullScreen()
+        }
+    }
+
+    // While the menu is open the controller is the menu's: D-pad and A go to it, B resumes (on
+    // release, so the game does not see B held as it comes back).
+    private fun menuKey(event: KeyEvent): Boolean {
+        val view = menu?.takeIf { it.isOpen } ?: return false
+        val code = event.keyCode
+        if (code == KeyEvent.KEYCODE_BUTTON_B || code == KeyEvent.KEYCODE_ESCAPE) {
+            if (event.action == KeyEvent.ACTION_UP) closeMenu()
+            return true
+        }
+        return when (code) {
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (event.action == KeyEvent.ACTION_DOWN) view.padKey(code)
+                true
+            }
+            else -> isGamepad(event.source)     // nothing else from the controller reaches the game
+        }
+    }
+
+    private fun isGamepad(source: Int): Boolean =
+        (source and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+            (source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_B) lastButtonBAt = android.os.SystemClock.uptimeMillis()
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            // A real Back key is acted on whatever device sent it; a Back the system made out of an
+            // unhandled B is not (see backPressed).
+            if ((event.flags and KeyEvent.FLAG_FALLBACK) != 0) return true
+            if (event.action == KeyEvent.ACTION_UP) backPressed()
+            return true
+        }
+        if (menuKey(event)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    // A stick or hat while the menu is open: pushing it in a direction is one press that way.
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        val view = menu?.takeIf { it.isOpen } ?: return super.dispatchGenericMotionEvent(event)
+        if (!isGamepad(event.source)) return super.dispatchGenericMotionEvent(event)
+        fun axis(a: Int, b: Int): Float {
+            val x = event.getAxisValue(a)
+            val y = event.getAxisValue(b)
+            return if (kotlin.math.abs(x) >= kotlin.math.abs(y)) x else y
+        }
+        val x = axis(MotionEvent.AXIS_HAT_X, MotionEvent.AXIS_X)
+        val y = axis(MotionEvent.AXIS_HAT_Y, MotionEvent.AXIS_Y)
+        val direction = when {
+            y <= -0.6f -> KeyEvent.KEYCODE_DPAD_UP
+            y >= 0.6f -> KeyEvent.KEYCODE_DPAD_DOWN
+            x <= -0.6f -> KeyEvent.KEYCODE_DPAD_LEFT
+            x >= 0.6f -> KeyEvent.KEYCODE_DPAD_RIGHT
+            else -> 0
+        }
+        if (direction != menuHeldDirection) {
+            menuHeldDirection = direction
+            if (direction != 0) view.padKey(direction)
+        }
+        return true
+    }
+
+    // The pause menu's switch: stores the setting, and shows or hides the overlay now when it can.
+    private fun setTouchControls(on: Boolean) {
+        val edit = preferences.edit().putBoolean("touch_controls", on)
+        /* With a controller connected the overlay only appears when it is forced; asking for touch
+         * controls on such a device is asking for exactly that. */
+        if (on && isNativeControllerActive()) edit.putBoolean("force_virtual", true)
+        edit.apply()
+        if (!gameWrapper.getFeature(VirtualControllerFeature::class).show(on)) {
+            Toast.makeText(this, "Touch controls will be ${if (on) "on" else "off"} the next time the game starts.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        /* Optional (Settings): show the account as playing on Steam while the game is on screen. */
+        SteamPresence.start(this)
+    }
+
+    override fun onStop() {
+        SteamPresence.stop()
+        super.onStop()
     }
 
     // On quit: pull the current save out of the WebView, upload it to Steam Cloud, then return to
@@ -130,6 +295,7 @@ class GameActivity : AppCompatActivity() {
             }
 
             val offlineSession = prefs.getBoolean("sessionOffline", false)
+            SteamPresence.stop()
             if (offlineSession || account == null || token == null || !saveFile.exists() || saveFile.length() == 0L) {
                 // Offline this session (manual toggle, or couldn't reach Steam at launch), not signed
                 // in, or nothing to push: keep the save local and DON'T attempt the cloud. The next
@@ -149,13 +315,18 @@ class GameActivity : AppCompatActivity() {
             Thread {
                 var msg = "Progress saved to Steam Cloud."
                 try {
-                    val sync = SteamCloudSync(account, token)
+                    val (sync, connected) = SteamCloudSync.open(account, token)
                     try {
-                        if (sync.connect() == SteamCloudSync.ConnectResult.OK) {
+                        if (connected == SteamCloudSync.ConnectResult.OK) {
                             val name = sync.findSave()?.name ?: "%WinAppDataLocal%cc.save"
-                            msg = when (sync.push(name, saveFile)) {
+                            msg = if (!GameFiles.cloudUploads(this)) {
+                                // Uploads are off (Settings): the save stays on this device. The next
+                                // online PLAY sees it as changed here and says so.
+                                "Saved on this device. Uploads to Steam Cloud are off."
+                            } else when (sync.push(name, saveFile)) {
                                 SteamCloudSync.PushResult.UPLOADED, SteamCloudSync.PushResult.UNCHANGED -> {
-                                    prefs.edit().putString("lastSyncedSha", SteamCloudSync.sha1Hex(saveFile)).apply()
+                                    prefs.edit().putString("lastSyncedSha", SteamCloudSync.sha1Hex(saveFile))
+                                        .putLong("lastSyncAt", System.currentTimeMillis()).apply()
                                     "Progress saved to Steam Cloud."
                                 }
                                 SteamCloudSync.PushResult.REFUSED_SMALLER ->
@@ -199,16 +370,6 @@ class GameActivity : AppCompatActivity() {
         }
     }
 
-    // A controller's B button is sometimes delivered as KEYCODE_BACK. Consume those (the game reads
-    // B via the gamepad API) so only the actual system back gesture/button reaches onBackPressed.
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && event != null &&
-            (event.source and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD) {
-            return true
-        }
-        return super.onKeyDown(keyCode, event)
-    }
-
     fun isNativeControllerActive(): Boolean {
         Log.d("CrossCode", "Searching for native controller...")
 
@@ -250,7 +411,8 @@ class GameActivity : AppCompatActivity() {
 
         Log.d("CrossCode", "Resuming game.")
 
-        gameWrapper.onResume()
+        /* Coming back with the menu open: the game stays paused until the menu is closed. */
+        if (menu?.isOpen != true) gameWrapper.onResume()
 
         goIntoFullScreen()
     }

@@ -2,84 +2,146 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
-    <SwitchPreference
-        android:defaultValue="true"
-        android:key="switch_layout_automatically"
-        android:summary="@string/switch_layout_automatically_summary"
-        android:title="@string/switch_layout_automatically" />
+    <!-- Grouped the way Alabaster Droid's settings are: the game, Steam, the save, the files. -->
 
-    <SwitchPreference
-        android:defaultValue="true"
-        android:key="disable_overlay_cutscenes"
-        android:summary="@string/disable_overlay_cutscenes_automatically_summary"
-        android:title="@string/disable_overlay_cutscenes" />
+    <PreferenceCategory app:title="@string/cat_game" app:iconSpaceReserved="false">
 
-    <SwitchPreference
-        android:defaultValue="false"
-        android:key="force_virtual"
-        app:summary="@string/force_virtual_summary"
-        app:title="@string/force_virtual_title" />
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="touch_controls"
+            app:summary="@string/touch_controls_summary"
+            app:title="@string/touch_controls_title" />
 
-    <SeekBarPreference
-        android:defaultValue="0"
-        android:key="overlay_transparency"
-        android:max="100"
-        app:showSeekBarValue="true"
-        app:summary="@string/overlay_transparency_summary"
-        app:title="@string/overlay_transparency_title" />
+        <ListPreference
+            android:defaultValue="0"
+            android:key="fps_limit"
+            app:summary="@string/fps_limit_summary"
+            app:title="@string/fps_limit_title" />
 
-    <SeekBarPreference
-        android:defaultValue="5"
-        android:key="overlay_scale_factor"
-        android:max="10"
-        app:summary="@string/overlay_size_summary"
-        app:title="@string/overlay_size_title" />
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="switch_layout_automatically"
+            android:summary="@string/switch_layout_automatically_summary"
+            android:title="@string/switch_layout_automatically" />
 
-    <SwitchPreference
-        android:defaultValue="true"
-        android:key="always_sprint"
-        android:summary="@string/always_sprint_summary"
-        android:title="@string/always_sprint_title" />
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="disable_overlay_cutscenes"
+            android:summary="@string/disable_overlay_cutscenes_automatically_summary"
+            android:title="@string/disable_overlay_cutscenes" />
 
-    <SwitchPreference
-        android:defaultValue="false"
-        android:key="disable_swipe_dash"
-        android:summary="@string/disable_swipe_dash_summary"
-        android:title="@string/disable_swipe_dash_title" />
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="force_virtual"
+            app:summary="@string/force_virtual_summary"
+            app:title="@string/force_virtual_title" />
 
-    <SwitchPreference
-        android:defaultValue="true"
-        android:key="vibration_on_rumble"
-        android:summary="@string/vibration_on_rumble_summary"
-        android:title="@string/vibration_on_rumble_title" />
+        <SeekBarPreference
+            android:defaultValue="0"
+            android:key="overlay_transparency"
+            android:max="100"
+            app:showSeekBarValue="true"
+            app:summary="@string/overlay_transparency_summary"
+            app:title="@string/overlay_transparency_title" />
 
-    <EditTextPreference
-        android:key="save_to_import"
-        android:summary="@string/import_save_summary"
-        android:title="@string/import_save_title" />
+        <SeekBarPreference
+            android:defaultValue="5"
+            android:key="overlay_scale_factor"
+            android:max="10"
+            app:summary="@string/overlay_size_summary"
+            app:title="@string/overlay_size_title" />
 
-    <Preference
-        android:key="fileToImport"
-        android:summary="@string/import_file_summary"
-        android:title="@string/import_file_title" />
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="always_sprint"
+            android:summary="@string/always_sprint_summary"
+            android:title="@string/always_sprint_title" />
 
-    <SwitchPreference
-        android:defaultValue="false"
-        android:key="export_save"
-        app:summary="@string/export_save_summary"
-        app:title="@string/export_save_title" />
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="disable_swipe_dash"
+            android:summary="@string/disable_swipe_dash_summary"
+            android:title="@string/disable_swipe_dash_title" />
 
-    <SwitchPreference
-        android:defaultValue="true"
-        android:key="steam_achievements"
-        app:summary="@string/steam_achievements_summary"
-        app:title="@string/steam_achievements_title" />
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="vibration_on_rumble"
+            android:summary="@string/vibration_on_rumble_summary"
+            android:title="@string/vibration_on_rumble_title" />
 
-    <SwitchPreference
-        android:defaultValue="false"
-        android:dependency="steam_achievements"
-        android:key="steam_achievements_dry_run"
-        app:summary="@string/steam_achievements_dry_run_summary"
-        app:title="@string/steam_achievements_dry_run_title" />
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="@string/cat_steam" app:iconSpaceReserved="false">
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="steam_playing_status"
+            app:summary="@string/steam_playing_summary"
+            app:title="@string/steam_playing_title" />
+
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="steam_achievements"
+            app:summary="@string/steam_achievements_summary"
+            app:title="@string/steam_achievements_title" />
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:dependency="steam_achievements"
+            android:key="steam_achievements_dry_run"
+            app:summary="@string/steam_achievements_dry_run_summary"
+            app:title="@string/steam_achievements_dry_run_title" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="@string/cat_saves" app:iconSpaceReserved="false">
+
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="steam_cloud_uploads"
+            app:summary="@string/cloud_uploads_summary"
+            app:title="@string/cloud_uploads_title" />
+
+        <Preference
+            android:key="cloud_check"
+            app:summary="@string/cloud_check_summary"
+            app:title="@string/cloud_check_title" />
+
+        <Preference
+            android:key="save_restore"
+            app:summary="@string/save_restore_summary"
+            app:title="@string/save_restore_title" />
+
+        <EditTextPreference
+            android:key="save_to_import"
+            android:summary="@string/import_save_summary"
+            android:title="@string/import_save_title" />
+
+        <Preference
+            android:key="fileToImport"
+            android:summary="@string/import_file_summary"
+            android:title="@string/import_file_title" />
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="export_save"
+            app:summary="@string/export_save_summary"
+            app:title="@string/export_save_title" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="@string/cat_files" app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="game_verify"
+            app:summary="@string/game_verify_summary"
+            app:title="@string/game_verify_title" />
+
+        <Preference
+            android:key="game_delete"
+            app:summary="@string/game_delete_summary"
+            app:title="@string/game_delete_title" />
+
+    </PreferenceCategory>
 
 </PreferenceScreen>

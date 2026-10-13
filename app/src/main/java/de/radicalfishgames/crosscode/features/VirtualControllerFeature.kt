@@ -4,6 +4,7 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import de.radicalfishgames.crosscode.GameActivity
+import de.radicalfishgames.crosscode.GameFiles
 import de.radicalfishgames.crosscode.GameWrapper
 import de.radicalfishgames.crosscode.GamepadJsonBridge
 import de.radicalfishgames.crosscode.gamelisteners.GameEventManager
@@ -28,7 +29,13 @@ class VirtualControllerFeature(gameWrapper: GameWrapper,
     lateinit var currentLayout: VirtualControllerLayout
         private set
 
-    internal val enabled = !hostActivity.isNativeControllerActive() || forceVirtualController
+    // "Touch controls" off (Settings, or the pause menu) means no overlay at all, whatever else is set.
+    internal val enabled = GameFiles.touchControls(hostActivity) &&
+        (!hostActivity.isNativeControllerActive() || forceVirtualController)
+
+    // False while the pause menu's switch has the overlay hidden for this session.
+    var shown = enabled
+        private set
 
     val layoutViews = HashMap<VirtualControllerLayout, ViewGroup>()
 
@@ -40,13 +47,16 @@ class VirtualControllerFeature(gameWrapper: GameWrapper,
             return
         }
 
-        // Hook the getGamepads-function to only return our gamepad
+        // Hook the getGamepads-function to only return our gamepad (the browser's own is kept, so the
+        // pause menu's "Touch controls" switch can hand the game back to a physical controller)
         runJS(
             """
                 var $JS_GAMEPADS_VAR = [];
-                navigator.getGamepads = function(){
+                window.__ccRealGetGamepads = window.__ccRealGetGamepads || navigator.getGamepads.bind(navigator);
+                window.__ccTouchGetGamepads = function(){
                     return $JS_GAMEPADS_VAR;
                 };
+                navigator.getGamepads = window.__ccTouchGetGamepads;
             """
                 .trimIndent()
                 .replace("\n", "")
@@ -82,6 +92,22 @@ class VirtualControllerFeature(gameWrapper: GameWrapper,
         }
     }
 
+    // The pause menu's "Touch controls" switch, for this session: hides the overlay and lets a
+    // physical controller through, or brings the overlay back. Returns false when the overlay was
+    // not set up at start (it was off, or a controller was connected): then only the stored setting
+    // can change, and it applies the next time the game starts.
+    fun show(on: Boolean): Boolean {
+        if (!enabled || !isControllerReady) return false
+        shown = on
+        hostActivity.findViewById<View>(R.id.control_container).visibility = if (on) View.VISIBLE else View.GONE
+        gameWrapper.blockWebViewClicks = on && !currentLayout.allowWebViewInteraction
+        runJS(
+            if (on) "navigator.getGamepads = window.__ccTouchGetGamepads;"
+            else "navigator.getGamepads = window.__ccRealGetGamepads;"
+        )
+        return true
+    }
+
     fun switchToLayout(newLayout: VirtualControllerLayout){
         if(!enabled){
             return
@@ -92,7 +118,7 @@ class VirtualControllerFeature(gameWrapper: GameWrapper,
         currentLayout = newLayout
         layoutViews[currentLayout]!!.visibility = View.VISIBLE
 
-        gameWrapper.blockWebViewClicks = !currentLayout.allowWebViewInteraction
+        gameWrapper.blockWebViewClicks = shown && !currentLayout.allowWebViewInteraction
     }
 
     private fun updateGamepadJS(){

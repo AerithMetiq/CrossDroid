@@ -75,6 +75,8 @@ class SteamDepotDownloader(private val accountName: String, private val refreshT
                 username = accountName
                 accessToken = refreshToken
                 shouldRememberPassword = true
+                // Its own loginID, so a save sync or the playing status can be logged on meanwhile.
+                loginID = LOGIN_ID
             })
         }
         manager.subscribe(LoggedOnCallback::class.java) { cb -> result = cb.result; loggedOn.countDown() }
@@ -84,12 +86,37 @@ class SteamDepotDownloader(private val accountName: String, private val refreshT
             Log.e(TAG, "[Depot] logon timed out"); return false
         }
         Log.i(TAG, "[Depot] logon result: $result")
+        busy = result == EResult.TryAnotherCM || result == EResult.ServiceUnavailable ||
+            result == EResult.Timeout || result == EResult.Busy
         return result == EResult.OK
     }
 
+    // True when connect() failed only because the Steam server that answered was busy; a fresh
+    // downloader (a new connection) usually lands on one that is not.
+    @Volatile var busy = false
+        private set
+
+    // Stops the download: files in progress fail, finished files stay for the next run to resume from.
+    @Volatile private var cancelled = false
+    fun cancel() { cancelled = true }
+
+    // What a finished download fetched, for the install marker and the update check.
+    @Volatile var buildId: String? = null
+        private set
+    @Volatile var manifests: List<Pair<Int, Long>> = emptyList()
+        private set
+
     // Download the CrossCode web game into destDir/CrossCode (so destDir/CrossCode/assets exists).
     // Returns true on success. `onProgress`/`log` surface to the UI.
-    fun download(crossCodeDir: File, onProgress: (Progress) -> Unit, log: (String) -> Unit): Boolean {
+    //
+    // `verify` re-hashes every file already on disk against the manifest instead of trusting its
+    // size, and re-downloads the ones that differ: that is "verify game files". A game update is the
+    // same run: files whose size is unchanged but whose content changed are only caught by `verify`,
+    // so an update is run with it on.
+    // `onBuild` hears Steam's build id before any file is touched, and answers whether to hash
+    // (it knows what is installed, so it can turn a plain run into an update).
+    fun download(crossCodeDir: File, verify: Boolean = false, onBuild: (String?) -> Boolean = { false },
+                 onProgress: (Progress) -> Unit, log: (String) -> Unit): Boolean {
         crossCodeDir.mkdirs()
 
         log("Fetching app info…")
@@ -100,6 +127,8 @@ class SteamDepotDownloader(private val accountName: String, private val refreshT
             .firstNotNullOfOrNull { it.apps[APP_ID] }
             ?: run { log("Couldn't read app info from Steam."); return false }
 
+        buildId = appInfo.keyValues.get("depots").get("branches").get(BRANCH).get("buildid").value
+        val hash = onBuild(buildId) || verify
         val depots = parseDepots(appInfo.keyValues.get("depots"), log)
         if (depots.isEmpty()) { log("No downloadable depots found."); return false }
 
@@ -149,9 +178,10 @@ class SteamDepotDownloader(private val accountName: String, private val refreshT
                         val out = File(crossCodeDir, rel)
                         out.parentFile?.mkdirs()
                         try {
+                            if (cancelled) throw InterruptedException("cancelled")
                             // Resume skip: size match (chunks + file were SHA-verified when first written,
-                            // so re-hashing 1.5 GB on every resume is unnecessary).
-                            if (out.exists() && out.length() == file.totalSize) {
+                            // so re-hashing 1.5 GB on every resume is unnecessary). A verify run hashes.
+                            if (out.exists() && out.length() == file.totalSize && (!hash || verifyFile(out, file))) {
                                 downloadedBytes.addAndGet(file.totalSize)
                             } else {
                                 downloadFile(ctx.depotId, ctx.key, file, out, servers, log) { delta ->
@@ -169,6 +199,7 @@ class SteamDepotDownloader(private val accountName: String, private val refreshT
                 pool.shutdown()
             }
             remaining = stillFailed
+            if (cancelled) { log("Download cancelled."); return false }
             if (remaining.isNotEmpty()) log("Retrying ${remaining.size} file(s) (pass ${pass + 1} of $FILE_PASSES)…")
         }
 
@@ -177,6 +208,7 @@ class SteamDepotDownloader(private val accountName: String, private val refreshT
                 remaining.joinToString(", ") { "d${it.first.depotId}/${normalize(it.second.fileName)}" })
             return false
         }
+        manifests = ctxs.map { it.depotId to (it.manifest.manifestGID) }
         log("CrossCode downloaded.")
         return true
     }
@@ -247,6 +279,7 @@ class SteamDepotDownloader(private val accountName: String, private val refreshT
                 val buffer = ByteArray(chunk.uncompressedLength)
                 var written = 0
                 for (attempt in 0 until MAX_RETRIES) {
+                    if (cancelled) throw InterruptedException("cancelled")
                     val server = nextServer(servers)
                     try {
                         // Suspend variant under our own runBlocking, NOT downloadDepotChunkFuture: the
@@ -369,6 +402,7 @@ class SteamDepotDownloader(private val accountName: String, private val refreshT
     companion object {
         private const val TAG = "CrossCode"
         const val APP_ID = 368340
+        private const val LOGIN_ID = 0x43434441
         private const val BRANCH = "public"
         private const val MAX_RETRIES = 5
         private const val CONCURRENCY = 8

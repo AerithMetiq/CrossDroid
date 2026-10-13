@@ -1,8 +1,13 @@
 package de.radicalfishgames.crosscode.steam
 
 import android.util.Log
+import `in`.dragonbra.javasteam.enums.EOSType
 import `in`.dragonbra.javasteam.enums.EPersonaState
 import `in`.dragonbra.javasteam.enums.EResult
+import `in`.dragonbra.javasteam.steam.handlers.steamapps.GamePlayedInfo
+import `in`.dragonbra.javasteam.steam.handlers.steamapps.PICSRequest
+import `in`.dragonbra.javasteam.steam.handlers.steamapps.SteamApps
+import `in`.dragonbra.javasteam.steam.handlers.steamapps.callback.PICSProductInfoCallback
 import `in`.dragonbra.javasteam.steam.handlers.steamcloud.SteamCloud
 import `in`.dragonbra.javasteam.steam.handlers.steamfriends.SteamFriends
 import `in`.dragonbra.javasteam.steam.handlers.steamfriends.callback.PersonaStatesCallback
@@ -25,7 +30,17 @@ import java.util.zip.ZipInputStream
 // Logs in with a stored refresh token and syncs Steam Cloud files for CrossCode (app 368340).
 // PULL = download a cloud file to disk (the file CloudSaveFeature injects into localStorage before boot).
 // Steam serves cloud files via a one-shot HTTPS URL; large files come back zipped.
-class SteamCloudSync(private val accountName: String, private val refreshToken: String) {
+//
+// `purpose` picks the logon's loginID. Steam lets one account be logged on several times as long as
+// the ids differ, and replaces a session whose id is used again; so jobs that can overlap (the
+// launcher's sync, the game download, the "playing" status) each get their own.
+class SteamCloudSync(
+    private val accountName: String,
+    private val refreshToken: String,
+    private val purpose: Purpose = Purpose.SAVES
+) {
+
+    enum class Purpose { SAVES, DOWNLOAD, PLAYING }
 
     private val client = SteamClient()
     private val manager = CallbackManager(client)
@@ -44,6 +59,11 @@ class SteamCloudSync(private val accountName: String, private val refreshToken: 
     // token and refuse to launch when you're simply offline).
     enum class ConnectResult { OK, AUTH_FAILED, NETWORK_FAILED }
 
+    // True when the last connect() failed only because the Steam server that answered was busy
+    // ("try another server"); a fresh connection usually lands on one that is not (see open()).
+    @Volatile var busy = false
+        private set
+
     fun connect(timeoutSec: Long = 20): ConnectResult {
         val loggedOn = CountDownLatch(1)
         var result: EResult? = null
@@ -53,6 +73,7 @@ class SteamCloudSync(private val accountName: String, private val refreshToken: 
                 username = accountName
                 accessToken = refreshToken
                 shouldRememberPassword = true
+                loginID = LOGIN_ID + purpose.ordinal
             })
         }
         manager.subscribe(LoggedOnCallback::class.java) { cb ->
@@ -72,33 +93,88 @@ class SteamCloudSync(private val accountName: String, private val refreshToken: 
             return ConnectResult.NETWORK_FAILED
         }
         Log.i("CrossCode", "[Steam] logon result: $result")
-        return if (result == EResult.OK) ConnectResult.OK else ConnectResult.AUTH_FAILED
+        return when (result) {
+            EResult.OK -> ConnectResult.OK
+            // The server is busy, not the login wrong: must not be read as an expired login.
+            EResult.TryAnotherCM, EResult.ServiceUnavailable, EResult.Timeout, EResult.Busy -> {
+                busy = true
+                ConnectResult.NETWORK_FAILED
+            }
+            else -> ConnectResult.AUTH_FAILED
+        }
     }
 
     data class Profile(val personaName: String?, val avatarHashHex: String?)
 
-    // After logon, fetch the local user's display name + avatar hash. We go Online briefly and wait
-    // for our own PersonaStatesCallback (the avatar hash builds the avatars.steamstatic.com URL).
+    // After logon, fetch the local user's display name + avatar hash (the hash builds the
+    // avatars.steamstatic.com URL). Asks for the account's own name and presence only and waits for
+    // an answer that carries an avatar; it does not set the account "online" to friends.
+    //
+    // This used to go Online and take the first persona callback, which often arrives before the
+    // avatar is known: the hash came back empty, Steam's default "?" picture was saved, and because
+    // a picture then existed it was never fetched again.
     fun fetchProfile(timeoutSec: Long = 8): Profile? {
         val friends = client.getHandler(SteamFriends::class.java) ?: return null
         val ready = CountDownLatch(1)
         var name: String? = null
         var hashHex: String? = null
-        manager.subscribe(PersonaStatesCallback::class.java) { cb ->
+        val sub = manager.subscribe(PersonaStatesCallback::class.java) { cb ->
             if (friends.isLocalUser(cb.friendID)) {
-                name = cb.name
-                hashHex = cb.avatarHash?.toHex()
-                ready.countDown()
+                cb.name?.takeIf { it.isNotEmpty() }?.let { name = it }
+                cb.avatarHash?.takeIf { h -> h.any { it.toInt() != 0 } }?.let {
+                    hashHex = it.toHex()
+                    ready.countDown()
+                }
             }
         }
-        friends.setPersonaState(EPersonaState.Online)
-        try { client.steamID?.let { friends.requestFriendInfo(it) } } catch (_: Throwable) {}
+        try {
+            client.steamID?.let { friends.requestFriendInfo(it, PERSONA_NAME or PERSONA_PRESENCE) }
+        } catch (_: Throwable) {}
         ready.await(timeoutSec, TimeUnit.SECONDS)
+        runCatching { sub?.close() }
         val finalName = name ?: runCatching { friends.getPersonaName() }.getOrNull()
-        val finalHash = hashHex ?: runCatching { friends.getPersonaAvatar()?.toHex() }.getOrNull()
+        val finalHash = hashHex ?: runCatching {
+            friends.getPersonaAvatar()?.takeIf { h -> h.any { it.toInt() != 0 } }?.toHex()
+        }.getOrNull()
         Log.i("CrossCode", "[Steam] profile: name=$finalName avatar=$finalHash")
         return Profile(finalName, finalHash)
     }
+
+    // Read-only: the build id of CrossCode's public branch on Steam, or null when Steam does not
+    // say. The launcher compares it with the installed build to offer an update.
+    fun publicBuildId(): String? = runCatching {
+        val apps = client.getHandler(SteamApps::class.java)!!
+        val token = apps.picsGetAccessTokens(APP_ID).toFuture().get(20, TimeUnit.SECONDS).appTokens[APP_ID] ?: 0L
+        val info = apps.picsGetProductInfo(PICSRequest(APP_ID, token)).toFuture().get(20, TimeUnit.SECONDS)
+        info.results.filterIsInstance<PICSProductInfoCallback>().firstNotNullOfOrNull { it.apps[APP_ID] }
+            ?.keyValues?.get("depots")?.get("branches")?.get("public")?.get("buildid")?.value
+    }.onFailure { Log.w("CrossCode", "[Steam] build check failed: ${it.message}") }.getOrNull()
+
+    // WRITES TO STEAM: shows the account as online and playing CrossCode for as long as this
+    // session stays logged on. Friends see it and Steam counts the play time. stopPlaying(), or
+    // disconnecting, ends it. `onState` gets Steam's own word on it ("Online, game 368340") each
+    // time Steam pushes this account's status.
+    fun showPlaying(buildId: Int, processId: Int, onState: (String) -> Unit) {
+        val friends = client.getHandler(SteamFriends::class.java) ?: return
+        val apps = client.getHandler(SteamApps::class.java) ?: return
+        manager.subscribe(PersonaStatesCallback::class.java) { cb ->
+            if (friends.isLocalUser(cb.friendID)) onState("${cb.state}, game ${cb.gameAppID}")
+        }
+        friends.setPersonaState(EPersonaState.Online)
+        Thread.sleep(1000)
+        apps.notifyGamesPlayed(
+            listOf(GamePlayedInfo(gameId = APP_ID.toLong(), processId = processId,
+                ownerId = client.steamID?.accountID?.toInt() ?: 0, gameBuildId = buildId)),
+            EOSType.AndroidUnknown
+        )
+    }
+
+    fun stopPlaying() {
+        runCatching { client.getHandler(SteamApps::class.java)?.notifyGamesPlayed(emptyList(), EOSType.AndroidUnknown) }
+        runCatching { client.getHandler(SteamFriends::class.java)?.setPersonaState(EPersonaState.Offline) }
+    }
+
+    val isConnected: Boolean get() = client.isConnected
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
@@ -128,10 +204,20 @@ class SteamCloudSync(private val accountName: String, private val refreshToken: 
 
     // Download a cloud file to dest. Returns true on success.
     fun pull(filename: String, dest: File): Boolean {
-        val info = cloud.clientFileDownload(APP_ID, filename).get()
+        val bytes = fetch(filename) ?: return false
+        dest.parentFile?.mkdirs()
+        SaveBackups.backup(dest)       // keep the prior local save in cloudsave/backups before overwriting
+        writeAtomically(dest, bytes)
+        Log.i("CrossCode", "[Steam] pulled $filename (${bytes.size} bytes) -> ${dest.absolutePath}")
+        return true
+    }
+
+    // A cloud file's bytes, or null. Read-only: nothing on this device or on Steam changes.
+    fun fetch(filename: String): ByteArray? {
+        val info = cloud.clientFileDownload(APP_ID, filename).get(30, TimeUnit.SECONDS)
         if (info.urlHost.isNullOrEmpty()) {
             Log.e("CrossCode", "[Steam] no download URL for $filename")
-            return false
+            return null
         }
 
         val scheme = if (info.useHttps) "https" else "http"
@@ -149,11 +235,7 @@ class SteamCloudSync(private val accountName: String, private val refreshToken: 
             bytes = unzipSingleEntry(bytes)
         }
 
-        dest.parentFile?.mkdirs()
-        backupIfPresent(dest)          // keep the prior local save as .bak before overwriting
-        writeAtomically(dest, bytes)
-        Log.i("CrossCode", "[Steam] pulled $filename (${bytes.size} bytes) -> ${dest.absolutePath}")
-        return true
+        return bytes
     }
 
     // Upload a local file to Steam Cloud. Returns:
@@ -251,14 +333,6 @@ class SteamCloudSync(private val accountName: String, private val refreshToken: 
         }
     }
 
-    // Keep the current file as <name>.bak before it gets overwritten — insurance against any
-    // sync mistake; the previous save is always one copy away.
-    private fun backupIfPresent(f: File) {
-        if (f.exists() && f.length() > 0) runCatching {
-            f.copyTo(File(f.parentFile, f.name + ".bak"), overwrite = true)
-        }
-    }
-
     // Write via a temp file + rename so a crash mid-write can never leave a half-written save.
     private fun writeAtomically(dest: File, bytes: ByteArray) {
         val tmp = File(dest.parentFile, dest.name + ".tmp")
@@ -284,6 +358,34 @@ class SteamCloudSync(private val accountName: String, private val refreshToken: 
 
     companion object {
         const val APP_ID = 368340  // CrossCode
+
+        // Any stable non-zero value; Steam only compares it between sessions of one account.
+        private const val LOGIN_ID = 0x43434431
+        // EClientPersonaStateFlag bits: the name, and presence (which carries the avatar hash).
+        private const val PERSONA_NAME = 2
+        private const val PERSONA_PRESENCE = 16
+
+        // Connects and logs on. A server that answers "busy / try another server" is common and
+        // brief, so that answer is met with a fresh connection, up to `attempts` times. `hold` gets
+        // each session as it is made, so the caller can disconnect it to cancel. The returned
+        // session must be disconnect()ed whatever the result.
+        fun open(account: String, token: String, purpose: Purpose = Purpose.SAVES, attempts: Int = 3,
+                 hold: (SteamCloudSync) -> Unit = {}): Pair<SteamCloudSync, ConnectResult> {
+            var sync = SteamCloudSync(account, token, purpose)
+            hold(sync)
+            var result = sync.connect()
+            var attempt = 1
+            while (result == ConnectResult.NETWORK_FAILED && sync.busy && attempt < attempts) {
+                sync.disconnect()
+                Thread.sleep(1000L * attempt)
+                attempt++
+                Log.i("CrossCode", "[Steam] server busy; trying another (attempt $attempt)")
+                sync = SteamCloudSync(account, token, purpose)
+                hold(sync)
+                result = sync.connect()
+            }
+            return sync to result
+        }
 
         // SHA-1 (hex) of a file's bytes, or null if it's missing/empty. Lets the launcher tell
         // whether the local save matches the cloud and/or the last-synced baseline.

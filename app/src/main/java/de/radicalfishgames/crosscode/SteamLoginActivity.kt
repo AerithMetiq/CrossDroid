@@ -36,8 +36,10 @@ import com.google.zxing.qrcode.QRCodeWriter
 import de.radicalfishgames.crosscode.steam.SteamAuth
 import de.radicalfishgames.crosscode.preferences.PreferencesActivity
 import de.radicalfishgames.crosscode.steam.AchievementSync
+import de.radicalfishgames.crosscode.steam.SaveBackups
+import de.radicalfishgames.crosscode.steam.SaveSync
 import de.radicalfishgames.crosscode.steam.SteamCloudSync
-import de.radicalfishgames.crosscode.steam.SteamDepotDownloader
+import de.radicalfishgames.crosscode.steam.SteamPresence
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -67,6 +69,12 @@ class SteamLoginActivity : AppCompatActivity() {
     private lateinit var avatar: ShapeableImageView
 
     @Volatile private var profileRefreshing = false
+    private var profileRefreshed = false
+    private lateinit var syncStatus: TextView
+
+    // The game download runs in GameDownloadService; the launcher mirrors its state.
+    private val downloading get() = GameDownloadState.running
+    private val onDownloadChanged: () -> Unit = { showDownload() }
 
     private val prefs get() = getSharedPreferences("steam", MODE_PRIVATE)
     private val avatarFile get() = File(getExternalFilesDir(null), "profile/avatar.png")
@@ -92,6 +100,7 @@ class SteamLoginActivity : AppCompatActivity() {
         playButton = findViewById(R.id.play_button)
         offlineToggle = findViewById(R.id.offline_toggle)
         avatar = findViewById(R.id.avatar)
+        syncStatus = findViewById(R.id.sync_status)
 
         // Keep the pixel-art logo crisp instead of bilinear-smeared when scaled up.
         (findViewById<ImageView>(R.id.logo).drawable as? BitmapDrawable)?.isFilterBitmap = false
@@ -114,6 +123,28 @@ class SteamLoginActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        GameDownloadState.listen(onDownloadChanged)
+    }
+
+    override fun onStop() {
+        GameDownloadState.unlisten(onDownloadChanged)
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        /* Back on the launcher: the game is not on screen, so the playing status ends. Settings
+         * may have changed what PLAY does. */
+        SteamPresence.stop()
+        if (prefs.getString("token", null) != null) {
+            updatePlayLabel()
+            showSyncStatus()
+        }
+        showDownload()
+    }
+
     // Show the right half of the UI for the current login state, set initial controller focus.
     private fun renderState() {
         val account = prefs.getString("account", null)
@@ -125,7 +156,8 @@ class SteamLoginActivity : AppCompatActivity() {
             updatePlayLabel()
             refreshAccountLine()
             loadAvatar()
-            refreshProfileIfNeeded()
+            refreshProfile()
+            showSyncStatus()
             playButton.requestFocus()
         } else {
             signedInGroup.visibility = View.GONE
@@ -167,30 +199,66 @@ class SteamLoginActivity : AppCompatActivity() {
     private val playOffline: Boolean get() = prefs.getBoolean("playOffline", false)
 
     private fun updatePlayLabel() {
-        if (playOffline) {
-            playButton.text = "▶  PLAY OFFLINE"
-            findViewById<TextView>(R.id.play_caption).text = "Plays your local save · no cloud sync"
-        } else {
-            playButton.text = "▶  PLAY"
-            findViewById<TextView>(R.id.play_caption).text = "Pulls your latest save · uploads to Steam Cloud on quit"
+        val caption = findViewById<TextView>(R.id.play_caption)
+        when {
+            downloading -> {
+                playButton.text = "✕  CANCEL"
+                caption.text = "Downloading CrossCode · it carries on if you leave this screen" +
+                    if (notificationsOn()) "" else "\nNotifications are off for CrossDroid, so there is no progress notification"
+            }
+            !GameFiles.installed(this) -> {
+                playButton.text = "↓  DOWNLOAD"
+                caption.text = "Downloads your own copy of CrossCode from Steam (about 1.5 GB)"
+            }
+            playOffline -> {
+                playButton.text = "▶  PLAY OFFLINE"
+                caption.text = "Plays your local save · no cloud sync"
+            }
+            GameFiles.updateAvailable(this) -> {
+                playButton.text = "↑  UPDATE"
+                caption.text = "A new build of CrossCode is on Steam"
+            }
+            else -> {
+                playButton.text = "▶  PLAY"
+                caption.text = if (GameFiles.cloudUploads(this)) "Pulls your latest save · uploads to Steam Cloud on quit"
+                else "Pulls your latest save · uploads are off (Settings)"
+            }
         }
     }
 
-    // For an already-signed-in user with no cached avatar, fetch it quietly in the background.
-    private fun refreshProfileIfNeeded() {
-        if (avatarFile.exists() || profileRefreshing) return
+    // The standing line under PLAY: when the save last matched Steam Cloud, and whether it changed since.
+    private fun showSyncStatus() {
+        Thread {
+            val text = SaveSync.status(
+                System.currentTimeMillis(), GameFiles.lastSyncAt(this),
+                SteamCloudSync.sha1Hex(GameFiles.saveFile(this)), lastSyncedSha
+            )
+            runOnUiThread { syncStatus.text = text }
+        }.apply { isDaemon = true; name = "SyncStatus"; start() }
+    }
+
+    // Once per visit to the launcher, log on quietly to refresh the persona name and avatar, and to
+    // ask Steam for CrossCode's current build (read-only) so an update can be offered.
+    //
+    // This used to run only while no avatar file existed. But a first fetch that came back without
+    // an avatar saved Steam's default "?" picture, and from then on a picture existed, so the real
+    // one was never fetched. Now the avatar is downloaded whenever its hash differs from the one on
+    // disk, and the default picture is not saved at all.
+    private fun refreshProfile() {
+        if (profileRefreshed || profileRefreshing) return
         val account = prefs.getString("account", null) ?: return
         val token = prefs.getString("token", null) ?: return
         profileRefreshing = true
         Thread {
             try {
-                val sync = SteamCloudSync(account, token)
+                val (sync, result) = SteamCloudSync.open(account, token)
                 try {
-                    if (sync.connect() == SteamCloudSync.ConnectResult.OK) {
-                        sync.fetchProfile()?.let { p ->
-                            prefs.edit().putString("persona", p.personaName)
-                                .putString("avatarHash", p.avatarHashHex).apply()
-                            if (downloadAvatar(p.avatarHashHex)) runOnUiThread { loadAvatar(); refreshAccountLine() }
+                    if (result == SteamCloudSync.ConnectResult.OK) {
+                        profileRefreshed = true
+                        sync.fetchProfile()?.let { saveProfile(it) }
+                        if (GameFiles.installed(this)) {
+                            sync.publicBuildId()?.let { GameFiles.setSteamBuild(this, it) }
+                            runOnUiThread { updatePlayLabel() }
                         }
                     }
                 } finally { sync.disconnect() }
@@ -198,6 +266,16 @@ class SteamLoginActivity : AppCompatActivity() {
                 Log.e("CrossCode", "[Steam] profile refresh failed", t)
             } finally { profileRefreshing = false }
         }.apply { isDaemon = true; name = "SteamProfile"; start() }
+    }
+
+    // Stores the persona name and, when its hash is not the one already on disk, the avatar.
+    private fun saveProfile(p: SteamCloudSync.Profile) {
+        p.personaName?.let { prefs.edit().putString("persona", it).apply() }
+        val hash = p.avatarHashHex?.takeIf { it.length == 40 && it.any { c -> c != '0' } }
+        if (hash != null && (hash != prefs.getString("avatarHash", null) || !avatarFile.exists())) {
+            if (downloadAvatar(hash)) prefs.edit().putString("avatarHash", hash).apply()
+        }
+        runOnUiThread { loadAvatar(); refreshAccountLine() }
     }
 
     private fun signIn() {
@@ -343,10 +421,20 @@ class SteamLoginActivity : AppCompatActivity() {
         val account = prefs.getString("account", null)
         val token = prefs.getString("token", null)
         if (account == null || token == null) { renderState(); return }
-        if (!gameFilesPresent()) {
-            downloadCrossCode(account, token)
+        if (downloading) {
+            setStatus("Stopping the download…")
+            GameDownloadService.cancel(this)
             return
         }
+        if (!GameFiles.installed(this)) {
+            startDownload()
+            return
+        }
+        if (!playOffline && GameFiles.updateAvailable(this) && !updateDeclined) {
+            askUpdate()
+            return
+        }
+        updateDeclined = false
         if (playOffline) {
             // Deliberate offline: skip the cloud round-trip and launch the local save now.
             // lastSyncedSha reconciles everything the next time you PLAY with the toggle off.
@@ -360,13 +448,14 @@ class SteamLoginActivity : AppCompatActivity() {
         Thread {
             val dest = File(getExternalFilesDir(null), "cloudsave/cc.save")
             val localSha = SteamCloudSync.sha1Hex(dest)
+            val uploads = GameFiles.cloudUploads(this)
             var launch = false
             var expired = false
             var conflict: ConflictInfo? = null
             var msg = ""
-            val sync = SteamCloudSync(account, token)
+            val (sync, connected) = SteamCloudSync.open(account, token)
             try {
-                when (sync.connect()) {
+                when (connected) {
                     SteamCloudSync.ConnectResult.NETWORK_FAILED -> {
                         prefs.edit().putBoolean("sessionOffline", true).apply()   // exit skips the cloud attempt
                         if (localSha != null) { msg = "Offline — playing your local save."; launch = true }
@@ -405,6 +494,10 @@ class SteamLoginActivity : AppCompatActivity() {
                                             lastSyncedSha = SteamCloudSync.sha1Hex(dest); msg = "Updated from Steam Cloud — launching…"; launch = true
                                         } else msg = "Couldn't download your cloud save. Try again."
                                     }
+                                    localChanged && !cloudChanged && !uploads -> {   // local moved on, uploads off -> keep it here
+                                        msg = "Your save here is newer than Steam Cloud's — not uploaded (uploads are off in Settings)."
+                                        launch = true
+                                    }
                                     localChanged && !cloudChanged -> {          // local moved on (e.g. offline progress) -> push
                                         msg = when (sync.push(cloud.name, dest)) {
                                             SteamCloudSync.PushResult.UPLOADED, SteamCloudSync.PushResult.UNCHANGED -> {
@@ -416,7 +509,7 @@ class SteamLoginActivity : AppCompatActivity() {
                                         launch = true
                                     }
                                     else -> {                                   // both changed (or no baseline) -> ask
-                                        conflict = ConflictInfo(account, token, cloud.name, cloud.timestampMillis, dest.lastModified())
+                                        conflict = ConflictInfo(account, token, cloud.name, cloud.timestampMillis, dest.lastModified(), cloud.shaHex)
                                     }
                                 }
                             }
@@ -431,6 +524,7 @@ class SteamLoginActivity : AppCompatActivity() {
                 sync.disconnect()
             }
             runOnUiThread {
+                showSyncStatus()
                 if (conflict != null) { setBusy(false); showConflictDialog(conflict!!); return@runOnUiThread }
                 setBusy(false, msg)
                 if (expired) { prefs.edit().remove("token").apply(); renderState() }
@@ -442,10 +536,10 @@ class SteamLoginActivity : AppCompatActivity() {
     // SHA-1 of the save the cloud and this device last agreed on — lets us tell who changed since.
     private var lastSyncedSha: String?
         get() = prefs.getString("lastSyncedSha", null)
-        set(v) { prefs.edit().putString("lastSyncedSha", v).apply() }
+        set(v) { prefs.edit().putString("lastSyncedSha", v).putLong("lastSyncAt", System.currentTimeMillis()).apply() }
 
     private data class ConflictInfo(val account: String, val token: String, val cloudName: String,
-                                    val cloudTs: Long, val localTs: Long)
+                                    val cloudTs: Long, val localTs: Long, val cloudSha: String)
 
     // Both the cloud save and this device's save changed since they last matched. Never auto-pick —
     // ask, and keep a backup of whichever isn't chosen so nothing is lost.
@@ -454,7 +548,9 @@ class SteamLoginActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("Which save do you want?")
             .setMessage("Your save here and your Steam Cloud save have both changed since they last matched " +
-                "($newer). Pick one to play — the other is backed up, not deleted.")
+                "($newer).\n\nSteam Cloud: saved ${SaveSync.time(c.cloudTs)}\nThis device: saved ${SaveSync.time(c.localTs)}\n\n" +
+                "Pick one to play — the other is backed up (Settings → Restore a save backup), not deleted." +
+                if (GameFiles.cloudUploads(this)) "" else "\n\nUploads are off, so choosing this device's save leaves Steam Cloud as it is.")
             .setCancelable(false)
             .setPositiveButton("This device's save") { _, _ -> resolveConflict(c, useLocal = true) }
             .setNegativeButton("Cloud save") { _, _ -> resolveConflict(c, useLocal = false) }
@@ -466,12 +562,19 @@ class SteamLoginActivity : AppCompatActivity() {
         Thread {
             val dest = File(getExternalFilesDir(null), "cloudsave/cc.save")
             var msg: String; var launch = false
-            val sync = SteamCloudSync(c.account, c.token)
+            val (sync, connected) = SteamCloudSync.open(c.account, c.token)
             try {
-                if (sync.connect() == SteamCloudSync.ConnectResult.OK) {
-                    if (useLocal) {
-                        // stash the cloud save aside, then push the local one up
-                        runCatching { sync.pull(c.cloudName, File(dest.parentFile, "cc.save.cloud.bak")) }
+                if (connected == SteamCloudSync.ConnectResult.OK) {
+                    if (useLocal && !GameFiles.cloudUploads(this)) {
+                        // Uploads are off: keep playing this device's save and leave Steam Cloud alone.
+                        // The cloud save it was weighed against becomes the baseline, so the question is
+                        // not asked again until Steam Cloud changes.
+                        lastSyncedSha = c.cloudSha
+                        msg = "Using this device's save. Steam Cloud was left as it is (uploads are off)."
+                        launch = true
+                    } else if (useLocal) {
+                        // keep the cloud save as a backup, then push the local one up
+                        runCatching { sync.fetch(c.cloudName)?.let { SaveBackups.store(dest, it, tag = "cloud") } }
                         msg = when (sync.push(c.cloudName, dest)) {
                             SteamCloudSync.PushResult.UPLOADED, SteamCloudSync.PushResult.UNCHANGED -> {
                                 lastSyncedSha = SteamCloudSync.sha1Hex(dest); "Using this device's save (cloud backed up)."
@@ -481,7 +584,7 @@ class SteamLoginActivity : AppCompatActivity() {
                         }
                         launch = true
                     } else {
-                        if (sync.pull(c.cloudName, dest)) {     // pull() keeps the local save as .bak first
+                        if (sync.pull(c.cloudName, dest)) {     // pull() backs the local save up first
                             lastSyncedSha = SteamCloudSync.sha1Hex(dest); msg = "Using your cloud save (local backed up)."; launch = true
                         } else msg = "Couldn't download the cloud save. Try again."
                     }
@@ -494,81 +597,61 @@ class SteamLoginActivity : AppCompatActivity() {
                 msg = "Sync error — playing your local save."
                 launch = dest.exists() && dest.length() > 0
             } finally { sync.disconnect() }
-            runOnUiThread { setBusy(false, msg); if (launch) launchGame() }
+            runOnUiThread { setBusy(false, msg); showSyncStatus(); if (launch) launchGame() }
         }.apply { isDaemon = true; name = "SteamConflict"; start() }
     }
 
-    // First run: download CrossCode's web game from the Steam CDN, extract the bundled mod loader,
-    // then launch. Resumable + auto-retrying inside the downloader.
-    private fun downloadCrossCode(account: String, token: String) {
-        setBusy(true, "Connecting to Steam to download CrossCode…")
-        runOnUiThread { downloadBar.progress = 0; downloadBar.visibility = View.VISIBLE }
-        Thread {
-            val ccDir = File(getExternalFilesDir(null), "CrossCode")
-            val lastPct = java.util.concurrent.atomic.AtomicInteger(-1)
-            var ok = false
-            try {
-                val dl = SteamDepotDownloader(account, token)
-                try {
-                    if (dl.connect()) {
-                        ok = dl.download(
-                            ccDir,
-                            onProgress = { p ->
-                                if (p.percent != lastPct.getAndSet(p.percent)) runOnUiThread {
-                                    downloadBar.progress = p.percent
-                                    status.text = "Downloading CrossCode… ${p.percent}%  (${p.completedFiles}/${p.totalFiles})"
-                                }
-                            },
-                            log = { Log.i("CrossCode", "[Depot] $it") }
-                        )
-                    } else setStatus("Couldn't reach Steam to download CrossCode.")
-                } finally {
-                    dl.disconnect()
-                }
-            } catch (t: Throwable) {
-                Log.e("CrossCode", "[Depot] download failed", t)
-                setStatus("Download failed: ${t.message ?: t.javaClass.simpleName}")
-            }
-
-            if (ok) {
-                setStatus("Installing mod loader…")
-                ok = try {
-                    provisionMods(ccDir); true
-                } catch (t: Throwable) {
-                    Log.e("CrossCode", "[Depot] mod provision failed", t)
-                    setStatus("Mod setup failed: ${t.message ?: t.javaClass.simpleName}"); false
-                }
-            }
-
-            runOnUiThread {
-                downloadBar.visibility = View.GONE
-                setBusy(false)
-                if (ok) { setStatus("CrossCode installed!"); play() }
-            }
-        }.apply { isDaemon = true; name = "SteamDownload"; start() }
+    // Downloads (or resumes, updates, repairs) CrossCode in GameDownloadService, so it carries on
+    // when this screen is left. The service sets up the mod loader when it is done.
+    private fun startDownload() {
+        /* The progress notification needs the player's say-so on Android 13+. The download does not
+         * wait for the answer and does not need it. */
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+        GameDownloadService.start(this)
     }
 
-    // Extract the bundled mod loader + cc-font-fix (assets/mods.zip) into the game dir.
-    private fun provisionMods(ccDir: File) {
-        val root = ccDir.canonicalPath
-        assets.open("mods.zip").use { ins ->
-            java.util.zip.ZipInputStream(ins).use { zis ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    val out = File(ccDir, entry.name)
-                    if (out.canonicalPath.startsWith(root)) {          // zip-slip guard
-                        if (entry.isDirectory) out.mkdirs()
-                        else { out.parentFile?.mkdirs(); out.outputStream().use { zis.copyTo(it) } }
-                    }
-                    zis.closeEntry()
-                    entry = zis.nextEntry
-                }
+    private fun notificationsOn(): Boolean =
+        androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()
+
+    // Mirrors the download service: the bar, the status line and the button.
+    private fun showDownload() {
+        if (GameDownloadState.running) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val percent = GameDownloadState.percent
+            downloadBar.visibility = View.VISIBLE
+            downloadBar.isIndeterminate = percent == null
+            percent?.let { downloadBar.progress = it }
+            status.text = GameDownloadState.status
+            updatePlayLabel()
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            downloadBar.visibility = View.GONE
+            GameDownloadState.takeEnd()?.let { end ->
+                if (prefs.getString("token", null) != null) status.text = end
+                updatePlayLabel()
             }
         }
-        Log.i("CrossCode", "[Depot] mod loader provisioned")
+    }
+
+    // A newer build is on Steam: update now, or play the installed one this time.
+    private var updateDeclined = false
+    private fun askUpdate() {
+        AlertDialog.Builder(this)
+            .setTitle("CrossCode has an update")
+            .setMessage("Steam has build ${GameFiles.steamBuild(this)}; this device has build ${GameFiles.installedBuild(this)}.\n\n" +
+                "Updating checks every file and downloads the ones that changed. The game cannot be played until the update has finished.")
+            .setPositiveButton("Update now") { _, _ -> startDownload() }
+            .setNegativeButton("Play this version") { _, _ -> updateDeclined = true; play() }
+            .setNeutralButton("Cancel", null)
+            .show()
     }
 
     private fun signOut() {
+        GameDownloadService.cancel(this)
         prefs.edit().remove("account").remove("token").remove("guard")
             .remove("persona").remove("avatarHash").apply()
         runCatching { avatarFile.delete() }
@@ -587,36 +670,19 @@ class SteamLoginActivity : AppCompatActivity() {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
     }
 
-    // "Installed" = game assets AND a mod-loader entry. A partial depot download has assets/ but no
-    // ccloader (mods are extracted only after the full download), so this won't mistake it for ready.
-    private fun gameFilesPresent(): Boolean {
-        val dir = getExternalFilesDir(null) ?: return false
-        val cc = File(dir, "CrossCode")
-        val hasAssets = File(cc, "assets").exists()
-        val hasLoader = File(cc, "ccloader/main.html").exists() ||
-            File(cc, "ccloader/index.html").exists() ||
-            File(cc, "ccloader3/main.html").exists()
-        return hasAssets && hasLoader
-    }
-
     // Connect with a refresh token: fetch the profile (name + avatar) and download the cloud cc.save.
     private fun pullCloudSave(account: String, token: String): String {
-        val sync = SteamCloudSync(account, token)
+        val (sync, connected) = SteamCloudSync.open(account, token)
         try {
-            when (sync.connect()) {
+            when (connected) {
                 SteamCloudSync.ConnectResult.NETWORK_FAILED ->
                     return "Signed in. (Offline — your cloud save will sync once you're back online.)"
                 SteamCloudSync.ConnectResult.AUTH_FAILED ->
                     return "Signed in, but Steam rejected the session. Try signing in again."
                 SteamCloudSync.ConnectResult.OK -> { /* continue below */ }
             }
-            runCatching {
-                sync.fetchProfile()?.let { p ->
-                    prefs.edit().putString("persona", p.personaName)
-                        .putString("avatarHash", p.avatarHashHex).apply()
-                    if (downloadAvatar(p.avatarHashHex)) runOnUiThread { loadAvatar(); refreshAccountLine() }
-                }
-            }
+            runCatching { sync.fetchProfile()?.let { saveProfile(it) } }
+            profileRefreshed = true
             val cloud = sync.findSave()
                 ?: return "Signed in. No cloud save found yet — you're ready to play."
             val dest = File(getExternalFilesDir(null), "cloudsave/cc.save")
@@ -629,18 +695,21 @@ class SteamLoginActivity : AppCompatActivity() {
         }
     }
 
-    // Download the Steam avatar JPG for this hash into profile/avatar.png. A blank/all-zero hash
-    // means the user has Steam's default avatar.
-    private fun downloadAvatar(hashHex: String?): Boolean {
-        val hex = hashHex?.takeIf { it.length == 40 && it.any { c -> c != '0' } } ?: DEFAULT_AVATAR
+    // Download the Steam avatar JPG for this hash into profile/avatar.png (the name is historical;
+    // the decoder reads the content, not the extension).
+    private fun downloadAvatar(hex: String): Boolean {
         return try {
             val conn = URL("https://avatars.steamstatic.com/${hex}_full.jpg").openConnection() as HttpURLConnection
             conn.connectTimeout = 15_000; conn.readTimeout = 15_000
-            val bytes = conn.inputStream.use { it.readBytes() }
-            conn.disconnect()
+            val bytes = try {
+                if (conn.responseCode != 200) throw java.io.IOException("HTTP ${conn.responseCode}")
+                conn.inputStream.use { it.readBytes() }
+            } finally { conn.disconnect() }
             avatarFile.parentFile?.mkdirs()
-            avatarFile.writeBytes(bytes)
-            Log.i("CrossCode", "[Steam] avatar saved (${bytes.size} bytes) hash=$hex")
+            val tmp = File(avatarFile.parentFile, avatarFile.name + ".tmp")
+            tmp.writeBytes(bytes)
+            if (!tmp.renameTo(avatarFile)) { avatarFile.writeBytes(bytes); tmp.delete() }
+            Log.i("CrossCode", "[Steam] avatar saved (${bytes.size} bytes)")
             true
         } catch (t: Throwable) {
             Log.e("CrossCode", "[Steam] avatar download failed", t); false
@@ -683,8 +752,4 @@ class SteamLoginActivity : AppCompatActivity() {
         return code
     }
 
-    companion object {
-        // Steam's default (no custom avatar) image hash.
-        private const val DEFAULT_AVATAR = "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb"
-    }
 }

@@ -20,6 +20,14 @@ controller, and sync your progress back to **Steam Cloud** when you quit. Built 
 - **In-game Exit** — restores the "Exit" option CrossCode hides on non-desktop, wired to the
   cloud-save-on-quit flow.
 - Shows your Steam avatar and persona name.
+- **Background download** — the first-run download carries on with a progress notification if you
+  leave the launcher or the screen turns off. The launcher offers an **update** when Steam has a newer
+  build, and Settings can **verify** or **delete** the game files.
+- **Save safety** — before a sync replaces the save on the device it keeps a backup you can restore
+  (Settings), a **check** shows what PLAY would do without doing it, and uploads can be switched off.
+- **In-game pause menu** — Back pauses the game and opens a menu a controller can drive: resume,
+  touch controls on/off, a frame-rate limit (30/45/60, plus 90/120 on screens that have them), quit.
+- **Playing status** (optional, off by default) — show as playing CrossCode on Steam.
 
 ## Requirements
 
@@ -44,8 +52,14 @@ controller, and sync your progress back to **Steam Cloud** when you quit. Built 
 
 CrossCode persists its save to the WebView's `localStorage`, byte-for-byte identical to the desktop
 `cc.save` that Steam Cloud syncs. CrossDroid pulls that file from Steam Cloud into the app before the
-game boots, and uploads it back when you quit — last-write-wins, and it skips the upload when nothing
-changed.
+game boots, and uploads it back when you quit, skipping the upload when nothing changed.
+
+The sync remembers the save both sides last agreed on. If only Steam Cloud changed since, PLAY
+downloads it; if only this device changed, it uploads; if both changed, you are asked which to keep.
+Whatever gets replaced on the device is first copied to `cloudsave/backups/` (the newest 8 are kept)
+and can be put back under **Settings → Restore a save backup**. **Settings → Check the save** reports
+what PLAY would do without changing anything, and **Upload this device's save to Steam Cloud** can be
+turned off to make the sync download-only.
 
 ## Steam achievements
 

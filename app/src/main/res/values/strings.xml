@@ -41,4 +41,24 @@
     <string name="steam_achievements_summary">Unlock your earned trophies as Steam achievements when you quit (or on the next online PLAY).</string>
     <string name="steam_achievements_dry_run_title">Achievements: dry run</string>
     <string name="steam_achievements_dry_run_summary">For troubleshooting: only log what would be unlocked (adb logcat -s CrossCode). Nothing is written to Steam.</string>
+    <string name="cat_game">Game</string>
+    <string name="cat_steam">Steam</string>
+    <string name="cat_saves">Steam Cloud save</string>
+    <string name="cat_files">Game files</string>
+    <string name="touch_controls_title">Touch controls</string>
+    <string name="touch_controls_summary">Off: no on-screen controls at all. On: shown when no controller is connected (or when the virtual controller is forced). Also in the in-game pause menu (Back).</string>
+    <string name="fps_limit_title">Frame rate limit</string>
+    <string name="fps_limit_summary">Draw fewer frames to save battery and heat. Also in the in-game pause menu (Back).</string>
+    <string name="steam_playing_title">Show me as playing on Steam</string>
+    <string name="steam_playing_summary">Off: Steam is not told when you play. On: while the game is on screen your friends see you online and in CrossCode, and Steam counts the play time. Not used when playing offline.</string>
+    <string name="cloud_uploads_title">Upload this device\'s save to Steam Cloud</string>
+    <string name="cloud_uploads_summary">On: your progress is uploaded when you quit. Off: PLAY still downloads a newer cloud save, but nothing on this device is sent to Steam.</string>
+    <string name="cloud_check_title">Check the save (changes nothing)</string>
+    <string name="cloud_check_summary">Compares the save on this device with Steam Cloud and says what PLAY would do, without doing it.</string>
+    <string name="save_restore_title">Restore a save backup</string>
+    <string name="save_restore_summary">Before a sync replaces the save on this device, it keeps a copy. Put one of those copies back.</string>
+    <string name="game_verify_title">Verify game files</string>
+    <string name="game_verify_summary">Checks every game file against Steam and downloads the ones that are missing or damaged.</string>
+    <string name="game_delete_title">Delete game files</string>
+    <string name="game_delete_summary">Frees the storage CrossCode takes. Your save, its backups and your settings stay.</string>
 </resources>
